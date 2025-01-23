@@ -1,0 +1,174 @@
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+const int trigPin = D5;
+const int echoPin = D6;
+
+const char* ssid = "Dot";
+const char* password = "012345678900";
+const char* server = "api.thingspeak.com";
+const char* thingSpeakWriteAPIKey = "90DAPZ4Q4Y652POM";
+
+const char* vonageApiKey = "your_vonage_api_key";
+const char* vonageApiSecret = "your_vonage_api_secret";
+const char* vonageSenderID = "+639123456789";
+const char* recipientPhoneNumber = "+639177221101";
+
+WiFiClientSecure client;
+
+#define DATA_COLLECTION_DURATION 5000
+#define MEASUREMENT_INTERVAL 100
+const int maxReadings = DATA_COLLECTION_DURATION / MEASUREMENT_INTERVAL;
+int distances[maxReadings];
+int readingsCount = 0;
+
+const int threshold1 = 167;
+const int threshold2 = 155;
+const int threshold3 = 129;
+const int threshold4 = 78;
+
+const char* message1 = "Alert: Distance crossed Threshold 1 (176-121 cm)!";
+const char* message2 = "Alert: Distance crossed Threshold 2 (120-81 cm)!";
+const char* message3 = "Alert: Distance crossed Threshold 3 (80-41 cm)!";
+const char* message4 = "Alert: Distance crossed Threshold 4 (<=40 cm)!";
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+  readingsCount = 0;
+
+  unsigned long startTime = millis();
+  while (millis() - startTime < DATA_COLLECTION_DURATION && readingsCount < maxReadings) {
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+
+    long duration = pulseIn(echoPin, HIGH, 30000);
+    int distanceCm = round((duration * 0.034) / 2);
+
+    distances[readingsCount++] = distanceCm;
+    Serial.print("Distance recorded: ");
+    Serial.print(distanceCm);
+    Serial.println(" cm");
+
+    delay(MEASUREMENT_INTERVAL);
+  }
+
+  int modeValue = calculateMode(distances, readingsCount);
+  Serial.print("Mode of distances: ");
+  Serial.println(modeValue);
+
+  if (modeValue >= threshold1) {
+    Serial.println(message1);
+    sendSMS(message1);
+  } else if (modeValue >= threshold2) {
+    Serial.println(message2);
+    sendSMS(message2);
+  } else if (modeValue >= threshold3) {
+    Serial.println(message3);
+    sendSMS(message3);
+  } else if (modeValue >= threshold4) {
+    Serial.println(message4);
+    sendSMS(message4);
+  }
+
+  uploadToThingSpeak(176 - modeValue);
+}
+
+int calculateMode(int* data, int size) {
+  int frequency[500] = {0};
+  int maxFreq = 0, mode = 0;
+
+  for (int i = 0; i < size; i++) {
+    if (data[i] >= 0 && data[i] < 500) {
+      frequency[data[i]]++;
+      if (frequency[data[i]] > maxFreq) {
+        maxFreq = frequency[data[i]];
+        mode = data[i];
+      }
+    }
+  }
+  return mode;
+}
+
+void uploadToThingSpeak(int value) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    WiFiClient client;
+
+    http.begin(client, "http://api.thingspeak.com/update?api_key=" + String(thingSpeakWriteAPIKey) + "&field1=" + String(value));
+
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+      Serial.print("ThingSpeak response code: ");
+      Serial.println(httpCode);
+    } else {
+      Serial.print("Failed to send data to ThingSpeak. Error: ");
+      Serial.println(http.errorToString(httpCode).c_str());
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi not connected, unable to upload data to ThingSpeak");
+  }
+}
+
+void sendSMS(const char* message) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+
+    String url = "https://rest.nexmo.com/sms/json";
+
+    String payload = "api_key=" + String(vonageApiKey) +
+                     "&api_secret=" + String(vonageApiSecret) +
+                     "&to=" + String(recipientPhoneNumber) +
+                     "&from=" + String(vonageSenderID) +
+                     "&text=" + String(message);
+
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    int httpCode = http.POST(payload);
+
+    if (httpCode > 0) {
+      Serial.print("SMS sent successfully, HTTP code: ");
+      Serial.println(httpCode);
+
+      String response = http.getString();
+      Serial.print("Response: ");
+      Serial.println(response);
+
+      if (response.indexOf("\"status\":\"0\"") >= 0) {
+        Serial.println("SMS sent successfully.");
+      } else {
+        Serial.println("Failed to send SMS. Check response for details.");
+      }
+    } else {
+      Serial.print("SMS failed, error: ");
+      Serial.println(http.errorToString(httpCode).c_str());
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi not connected, unable to send SMS");
+  }
+}
