@@ -1,0 +1,48 @@
+import requests
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from twilio.rest import Client
+
+# Fetch data from ThingSpeak
+thingSpeakAPIKey = "your_ThingSpeak_API_key"
+channelID = "your_channel_ID"
+url = f"https://api.thingspeak.com/channels/{channelID}/feeds.json?api_key={thingSpeakAPIKey}"
+
+response = requests.get(url)
+data = response.json()
+
+# Extract distance data from the feeds (assuming field1 stores the distance)
+distance_data = [float(entry['field1']) for entry in data['feeds']]
+time_data = np.array(range(len(distance_data)))
+
+# Train a linear regression model with the data
+model = LinearRegression()
+model.fit(time_data.reshape(-1, 1), distance_data)
+
+# Predict the future distance (e.g., next value)
+future_time = np.array([[len(distance_data) + 1]])  # Predict for the next time point
+predicted_distance = model.predict(future_time)
+
+# Print the predicted distance
+print(f"Predicted distance for next time point: {predicted_distance[0]} cm")
+
+# Set a threshold for flood risk (e.g., 10 cm)
+threshold = 10
+
+# Check if the predicted distance is below the threshold (indicating a flood risk)
+if predicted_distance[0] < threshold:
+    # Send SMS alert using Twilio
+    account_sid = "your_twilio_account_sid"
+    auth_token = "your_twilio_auth_token"
+    client = Client(account_sid, auth_token)
+
+    # Send message
+    message = client.messages.create(
+        to="recipient_phone_number",  # Replace with the recipient's phone number
+        from_="your_twilio_phone_number",  # Replace with your Twilio phone number
+        body="Flood risk predicted! Immediate action is required."
+    )
+
+    print("Flood risk predicted, SMS sent!")
+else:
+    print("No flood risk detected.")
